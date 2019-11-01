@@ -1,70 +1,55 @@
 import * as React from "react";
 
-interface ITransitionGroupProps {
-  enterDuration: number;
-  exitDuration: number;
-  className: string;
-  children: React.ReactElement | Array<React.ReactElement>;
+// An empty array to return for referential equality
+const EMPTY_ARRAY = [];
+
+interface IElementWithIndex {
+  readonly element: React.ReactElement;
+  readonly index: number;
 }
 
-interface IPositionedChild {
-  index: number;
-  element: React.ReactElement;
-}
-
-function toArray(children: Array<React.ReactElement> | React.ReactElement) {
-  return children instanceof Array ? [...children] : [children];
-}
-
-function getKeys(array: Array<React.ReactElement> | React.ReactElement) {
-  return new Set(toArray(array).map(element => element.key));
-}
-
-function getOldAndNewItems(
-  oldArray: Array<React.ReactElement>,
-  currentArray: React.ReactElement | Array<React.ReactElement>
-) {
-  const oldKeys = getKeys(oldArray);
-  const currentKeys = getKeys(currentArray);
-  const oldItems = oldArray
+// Compare two lists of ReactElements by key
+function elementDiff(
+  comparedItems: Array<React.ReactElement>,
+  compareWith: Array<React.ReactElement>
+): Array<IElementWithIndex> {
+  const compareWithKeys = new Set(compareWith.map(element => element.key));
+  const diff = comparedItems
     .map((element, index) => ({ element, index }))
-    .filter(({ element }) => !currentKeys.has(element.key));
-  const newKeys = Array.from(currentKeys.values()).filter(
-    key => !oldKeys.has(key)
-  ) as Array<string>;
-  return { oldItems, newKeys };
+    .filter(({ element }) => !compareWithKeys.has(element.key));
+  return diff.length ? diff : EMPTY_ARRAY;
 }
 
-// This is subtle. We need to calculate how many of the removed items we
-// already know about. But we also need to push the index of those new items
-// to reflect the other leaving items we're going to render.
-// So, if you have items A, B and C and remove A and then B, at the point that
-// you remove B its index in the `children` array will be 0, but if we're still
-// rendering the leaving animation for A it's ACTUAL index should be 1. This will
-// automatically be reduced in `removeLeavingItem` which A disappears for good.
-function getNewLeavingChildren(
-  oldItems: Array<IPositionedChild>,
-  leavingChildren: Array<IPositionedChild>
-): Array<IPositionedChild> {
-  return oldItems.reduce((memoArray, item) => {
-    let indexPush = 0;
-    // Filter is used here instead of `find` to ensure we loop over every item
-    // in the array for `indexPush` purposes
-    const isAlreadyLeaving = !!leavingChildren.filter(
-      ({ element: thisElement, index }) => {
-        if (index <= item.index + indexPush) {
-          indexPush++;
-        }
-        return thisElement.key === item.element.key;
-      }
-    ).length;
-    return isAlreadyLeaving
-      ? memoArray
-      : memoArray.concat({
-          element: item.element,
-          index: item.index + indexPush
+// Map either a single React Element or an array to a new array of React Elements
+function toArray(elements: React.ReactElement | Array<React.ReactElement>) {
+  return elements instanceof Array
+    ? elements.length
+      ? [...elements]
+      : EMPTY_ARRAY
+    : [elements];
+}
+
+// Add any newly removed children to the `leavingChildren` array.
+// We need to update the newly leaving children (which will have indices related to their last position in the component's children)
+// so that their indices reflect any *already* leaving children, which are no longer in the `children` array, but will still be
+// rendered until they've been removed from `leavingChildren`.
+function mergeInRemovedChildren(
+  removedChildren: Array<IElementWithIndex>,
+  leavingChildren: Array<IElementWithIndex>
+) {
+  return [...leavingChildren]
+    .concat(
+      removedChildren.map(({ element, index }) => {
+        let indexPush = 0;
+        leavingChildren.forEach(({ index: leavingChildIndex }) => {
+          if (leavingChildIndex <= index + indexPush) {
+            indexPush++;
+          }
         });
-  }, []);
+        return { element, index: index + indexPush };
+      })
+    )
+    .sort(({ index: indexA }, { index: indexB }) => indexA - indexB);
 }
 
 function cloneWithClassName(element: React.ReactElement, className: string) {
@@ -76,190 +61,234 @@ function cloneWithClassName(element: React.ReactElement, className: string) {
   );
 }
 
-export const TransitionGroup: React.FC<ITransitionGroupProps> = ({
-  enterDuration,
-  exitDuration,
-  className,
-  children
-}) => {
-  const [currentChildren, setCurrentChildren] = React.useState(
-    toArray(children)
-  );
-  const [leavingChildren, setLeavingChildren] = React.useState<
-    Array<IPositionedChild>
-  >([]);
-  const [enteringKeys, setEnteringKeys] = React.useState<Set<string>>(
-    new Set()
-  );
-  const [activeKeys, setActiveKeys] = React.useState<Set<string>>(new Set());
-  const oldChildren = React.useRef(children);
-  const leaveTimeouts = React.useRef(new Map<string, number>());
-  const enterTimeouts = React.useRef(new Map<string, number>());
+interface ITransitionGroupProps {
+  readonly children: Array<React.ReactElement> | React.ReactElement;
+  readonly transitionName: string;
+  readonly transitionEnterTimeout: number;
+  readonly transitionLeaveTimeout: number;
+}
 
-  const removeLeavingItem = React.useCallback(
-    (key: string) => () => {
-      setCurrentChildren(_currentChildren =>
-        _currentChildren.filter(item => item.key !== key)
-      );
-      window.clearTimeout(leaveTimeouts.current.get(key));
-      leaveTimeouts.current.delete(key);
-      setLeavingChildren(_leavingChildren => {
-        const leavingItem = _leavingChildren.find(
-          ({ element }) => element.key === key
-        );
-        if (!leavingItem) {
-          return _leavingChildren;
-        }
-        return (
-          _leavingChildren
-            .filter(({ element }) => {
-              return element.key !== key;
-            })
-            // Shift down the index of any leaving items after this in the array
-            .map(item => {
-              if (item.index > leavingItem.index) {
-                return { element: item.element, index: item.index - 1 };
-              }
-              return item;
-            })
-        );
-      });
-    },
-    []
-  );
-  const settleEnteringItem = React.useCallback(
-    (key: string) => () => {
-      setEnteringKeys(_newEnteringItems => {
-        _newEnteringItems.delete(key);
-        return _newEnteringItems;
-      });
-      window.clearTimeout(enterTimeouts.current.get(key));
-      enterTimeouts.current.delete(key);
-    },
-    []
-  );
-  const cancelLeavingItem = React.useCallback((key: string) => {
-    window.clearTimeout(leaveTimeouts.current.get(key));
-    leaveTimeouts.current.delete(key);
+export const TransitionGroup: React.FC<ITransitionGroupProps> = ({
+  children,
+  transitionName,
+  transitionEnterTimeout,
+  transitionLeaveTimeout
+}) => {
+  // Ensure the children we're working with is an array of ReactElements
+  const arrayChildren = React.useMemo(() => toArray(children), [children]);
+
+  // The previous children of the transition group
+  // By default, we do NOT animate elements in on first render
+  const oldChildren = React.useRef<Array<React.ReactElement>>(arrayChildren);
+
+  // The children which have been removed by the containing component and are being animated out
+  const leavingChildren = React.useRef<Array<IElementWithIndex>>([]);
+
+  // The children which have been recently added by the containing component and are being animated in (key only)
+  const [enteringChildren, setEnteringChildren] = React.useState<
+    Set<React.Key>
+  >(new Set());
+
+  // The animated elements which are not yet active - i.e. they have just been added or removed
+  const [inactiveChildren, setInactiveChildren] = React.useState<
+    Set<React.Key>
+  >(new Set());
+
+  // A store of the live timeouts
+  const liveTimeouts = React.useRef<Map<React.Key, number>>(new Map());
+  const clearLiveTimeout = React.useCallback((key: React.Key) => {
+    const currentTimeout = liveTimeouts.current.get(key);
+    if (currentTimeout) {
+      window.clearInterval(currentTimeout);
+    }
   }, []);
-  const setItemToLeave = React.useCallback(
-    (key: string) => {
-      if (leaveTimeouts.current.has(key)) {
-        return;
-      }
-      leaveTimeouts.current.set(
+
+  // remove a key from the activeChildren set
+  const makeElementActive = React.useCallback((key: React.Key) => {
+    setInactiveChildren(localInactiveChildren => {
+      const newInactiveChildren = new Set(localInactiveChildren);
+      newInactiveChildren.delete(key);
+      return newInactiveChildren;
+    });
+  }, []);
+  // set an element as inactive the next frame
+  const scheduleActivateElement = React.useCallback(
+    (key: React.Key) => {
+      window.setTimeout(() => makeElementActive(key), 100);
+      // window.requestAnimationFrame(() => makeElementActive(key));
+    },
+    [makeElementActive]
+  );
+
+  // remove a key from the enteringChildren set
+  const settleEnteringChild = React.useCallback((key: React.Key) => {
+    setEnteringChildren(localEnteringChildren => {
+      const newEnteringChildren = new Set(localEnteringChildren);
+      newEnteringChildren.delete(key);
+      return newEnteringChildren;
+    });
+  }, []);
+  // settle an element after the required delay
+  const scheduleSettleEnteringChild = React.useCallback(
+    (key: React.Key) => {
+      clearLiveTimeout(key);
+      liveTimeouts.current.set(
         key,
-        window.setTimeout(removeLeavingItem(key), exitDuration)
+        window.setTimeout(
+          () => settleEnteringChild(key),
+          transitionEnterTimeout
+        )
       );
     },
-    [exitDuration, removeLeavingItem]
+    [clearLiveTimeout, settleEnteringChild, transitionEnterTimeout]
   );
-  const setEnteringItemToSettle = React.useCallback(
-    (key: string) => {
-      if (enterTimeouts.current.has(key)) {
-        return;
-      }
-      enterTimeouts.current.set(
-        key,
-        window.setTimeout(settleEnteringItem(key), enterDuration)
-      );
-    },
-    [enterDuration, settleEnteringItem]
-  );
-  const removeActiveKey = React.useCallback(
-    (key: string) => {
-      window.setTimeout(() => {
-        setActiveKeys(_activeKeys => {
-          console.log("Active keys were", [..._activeKeys]);
-          console.log("removing key", key);
-          _activeKeys.delete(key);
-          console.log("Active keys are", [..._activeKeys]);
-          return _activeKeys;
+
+  // remove a key from the enteringChildren set
+  const removeLeavingChild = React.useCallback((key: React.Key) => {
+    // Since the leavingChildren are ordered, any *after* the removed child should have their index reduced by 1
+    let reduceIndex = 0;
+    leavingChildren.current = leavingChildren.current.reduce(
+      (
+        remainingLeavingChildren: Array<IElementWithIndex>,
+        { element, index }
+      ) => {
+        if (element.key === key) {
+          reduceIndex = 1;
+          return remainingLeavingChildren;
+        }
+        return remainingLeavingChildren.concat({
+          element,
+          index: index - reduceIndex
         });
-      }, 2000);
+      },
+      []
+    );
+  }, []);
+  // remove an element after the required delay
+  const scheduleRemoveLeavingChild = React.useCallback(
+    (key: React.Key) => {
+      clearLiveTimeout(key);
+      liveTimeouts.current.set(
+        key,
+        window.setTimeout(() => removeLeavingChild(key), transitionLeaveTimeout)
+      );
     },
-    [setActiveKeys]
+    [clearLiveTimeout, removeLeavingChild, transitionLeaveTimeout]
   );
+
+  // Get newly added children (with index)
+  const addedChildren = React.useMemo(
+    () => elementDiff(arrayChildren, oldChildren.current),
+    [arrayChildren]
+  );
+
+  // Update the current record of entering children with the newly added children
+  React.useEffect(() => {
+    if (addedChildren.length) {
+      setEnteringChildren(localEnteringChildren => {
+        addedChildren.forEach(({ element }) => {
+          localEnteringChildren.add(element.key);
+          scheduleSettleEnteringChild(element.key);
+        });
+        return localEnteringChildren;
+      });
+    }
+  }, [addedChildren, scheduleSettleEnteringChild]);
+
+  // Get newly removed children (with index)
+  const removedChildren = React.useMemo(() => {
+    console.log("Run A");
+    const removedChildren = elementDiff(oldChildren.current, arrayChildren);
+    return removedChildren;
+  }, [arrayChildren]);
 
   React.useEffect(() => {
-    const arrayChildren = toArray(children);
-    const { oldItems, newKeys } = getOldAndNewItems(
-      toArray(oldChildren.current),
-      arrayChildren
-    );
-    newKeys.forEach(key => {
-      cancelLeavingItem(key);
-      setEnteringItemToSettle(key);
-    });
-    if (newKeys.length) {
-      setEnteringKeys(_enteringKeys => {
-        newKeys.forEach(newKey => _enteringKeys.add(newKey));
-        return new Set(_enteringKeys);
+    if (removedChildren.length) {
+      removedChildren.forEach(({ element }) =>
+        scheduleRemoveLeavingChild(element.key)
+      );
+    }
+  }, [removedChildren, scheduleRemoveLeavingChild]);
+
+  const newLeavingChildren = React.useMemo(() => {
+    if (removedChildren.length) {
+      return mergeInRemovedChildren(removedChildren, leavingChildren.current);
+    }
+    return leavingChildren.current;
+  }, [removedChildren]);
+
+  // Update the current record of leaving children with the newly removed children
+  React.useEffect(() => {
+    leavingChildren.current = newLeavingChildren;
+  }, [newLeavingChildren]);
+
+  // Update the current record of inactive (just added/removed) animated elements
+  // useLayoutEffect is used instead of useEffect to guarantee that we don't rerender
+  // without having already added this to the inactive array, otherwise there could
+  // be strange artifacts as we start the animation the wrong way round
+  React.useLayoutEffect(() => {
+    if (addedChildren.length || removedChildren.length) {
+      setInactiveChildren(localInactiveChildren => {
+        const newInactiveChildren = new Set(localInactiveChildren);
+        addedChildren.concat(removedChildren).forEach(({ element }) => {
+          newInactiveChildren.add(element.key);
+          scheduleActivateElement(element.key);
+        });
+        return newInactiveChildren;
       });
     }
-    const newLeavingChildren = getNewLeavingChildren(oldItems, leavingChildren);
-    const newActiveKeys = newKeys.concat(
-      newLeavingChildren.map(({ element }) => element.key as string)
-    );
-    if (newActiveKeys.length) {
-      console.log(newActiveKeys);
-      setActiveKeys(new Set([...activeKeys, ...newActiveKeys]));
-      newActiveKeys.forEach(removeActiveKey);
-    }
-    const allLeavingChildren = leavingChildren.concat(newLeavingChildren);
-    if (newLeavingChildren.length) {
-      setLeavingChildren(allLeavingChildren);
-    }
-    oldItems.forEach(({ element }) => {
-      setItemToLeave(element.key as string);
-    });
+  }, [addedChildren, removedChildren, scheduleActivateElement]);
 
-    const newChildren = new Array(
-      arrayChildren.length + allLeavingChildren.length
+  // Set the oldChildren to be the current children for the next render
+  oldChildren.current = arrayChildren;
+
+  const childrenToRender = React.useMemo(() => {
+    const childrenToRenderLength =
+      arrayChildren.length + newLeavingChildren.length;
+    const localChildrenToRender: Array<React.ReactElement> = new Array(
+      childrenToRenderLength
     );
-    allLeavingChildren.forEach(item => {
-      newChildren[item.index] = cloneWithClassName(
-        item.element,
-        `${className} ${className}-leaving`
+    // First add the leaving children at the correct indices
+    newLeavingChildren.forEach(({ element, index }) => {
+      const isInactive = inactiveChildren.has(element.key);
+      localChildrenToRender[index] = cloneWithClassName(
+        element,
+        `${transitionName}-leave ${
+          isInactive ? "" : `${transitionName}-leave-active`
+        }`
       );
     });
+    // Then fill in the gaps with the still-existing children
     for (
-      let newIndex = 0, oldIndex = 0;
-      newIndex < arrayChildren.length + allLeavingChildren.length;
-      newIndex++
+      let index = 0, childIndex = 0;
+      index < childrenToRenderLength;
+      index++
     ) {
-      const itemKey = arrayChildren[oldIndex].key as string;
-      if (newChildren[newIndex]) {
-        continue;
+      if (!localChildrenToRender[index]) {
+        const child = arrayChildren[childIndex];
+        const isEntering = enteringChildren.has(child.key);
+        const isInactive = inactiveChildren.has(child.key);
+        const className = isEntering
+          ? isInactive
+            ? `${transitionName}-enter`
+            : `${transitionName}-enter ${transitionName}-enter-active`
+          : "";
+        localChildrenToRender[index] = cloneWithClassName(
+          arrayChildren[childIndex],
+          className
+        );
+        childIndex++;
       }
-      let itemClassName = className;
-      if (enteringKeys.has(itemKey)) {
-        itemClassName += ` ${className}-entering`;
-        if (activeKeys.has(itemKey)) {
-          itemClassName += ` ${className}-entering-active`;
-        }
-      }
-      newChildren[newIndex] = cloneWithClassName(
-        arrayChildren[oldIndex],
-        itemClassName
-      );
-      oldIndex++;
     }
-    oldChildren.current = children;
-    setCurrentChildren(newChildren);
+
+    return localChildrenToRender;
   }, [
-    children,
-    leavingChildren,
-    enteringKeys,
-    activeKeys,
-    cancelLeavingItem,
-    setItemToLeave,
-    setEnteringItemToSettle,
-    removeActiveKey,
-    className
+    transitionName,
+    arrayChildren,
+    newLeavingChildren,
+    enteringChildren,
+    inactiveChildren
   ]);
 
-  console.log("rendering");
-
-  return <React.Fragment>{currentChildren}</React.Fragment>;
+  return <React.Fragment>{childrenToRender}</React.Fragment>;
 };

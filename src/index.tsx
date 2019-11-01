@@ -1,7 +1,7 @@
 import * as React from "react";
 import { render } from "react-dom";
 
-import { TransitionGroup } from "./TransitionGroup2";
+import { TransitionGroup } from "./TransitionGroup";
 
 import "./styles.css";
 
