@@ -1,0 +1,23 @@
+.App {
+  font-family: sans-serif;
+  text-align: center;
+}
+
+.square {
+  width: 100px;
+  height: 100px;
+}
+
+.transition-enter {
+  height: 0;
+}
+
+.transition-enter.transition-enter-active {
+  transition: height 1000ms;
+  height: 100px;
+}
+
+.transition-leave.transition-leave-active {
+  height: 0;
+  transition: height 1000ms;
+}
