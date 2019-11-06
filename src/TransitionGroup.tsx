@@ -82,7 +82,9 @@ export const TransitionGroup: React.FC<ITransitionGroupProps> = ({
   const oldChildren = React.useRef<Array<React.ReactElement>>(arrayChildren);
 
   // The children which have been removed by the containing component and are being animated out
-  const leavingChildren = React.useRef<Array<IElementWithIndex>>([]);
+  const [leavingChildren, setLeavingChildren] = React.useState<
+    Array<IElementWithIndex>
+  >([]);
 
   // The children which have been recently added by the containing component and are being animated in (key only)
   const [enteringChildren, setEnteringChildren] = React.useState<
@@ -145,24 +147,26 @@ export const TransitionGroup: React.FC<ITransitionGroupProps> = ({
 
   // remove a key from the enteringChildren set
   const removeLeavingChild = React.useCallback((key: React.Key) => {
-    // Since the leavingChildren are ordered, any *after* the removed child should have their index reduced by 1
-    let reduceIndex = 0;
-    leavingChildren.current = leavingChildren.current.reduce(
-      (
-        remainingLeavingChildren: Array<IElementWithIndex>,
-        { element, index }
-      ) => {
-        if (element.key === key) {
-          reduceIndex = 1;
-          return remainingLeavingChildren;
-        }
-        return remainingLeavingChildren.concat({
-          element,
-          index: index - reduceIndex
-        });
-      },
-      []
-    );
+    setLeavingChildren(localLeavingChildren => {
+      // Since the leavingChildren are ordered, any *after* the removed child should have their index reduced by 1
+      let reduceIndex = 0;
+      return localLeavingChildren.reduce(
+        (
+          remainingLeavingChildren: Array<IElementWithIndex>,
+          { element, index }
+        ) => {
+          if (element.key === key) {
+            reduceIndex = 1;
+            return remainingLeavingChildren;
+          }
+          return remainingLeavingChildren.concat({
+            element,
+            index: index - reduceIndex
+          });
+        },
+        []
+      );
+    });
   }, []);
   // remove an element after the required delay
   const scheduleRemoveLeavingChild = React.useCallback(
@@ -196,60 +200,57 @@ export const TransitionGroup: React.FC<ITransitionGroupProps> = ({
   }, [addedChildren, scheduleSettleEnteringChild]);
 
   // Get newly removed children (with index)
-  const removedChildren = React.useMemo(() => {
-    console.log("Run A");
+  // Update the current record of leaving children with the newly removed children
+  React.useLayoutEffect(() => {
     const removedChildren = elementDiff(oldChildren.current, arrayChildren);
-    return removedChildren;
-  }, [arrayChildren]);
-
-  React.useEffect(() => {
     if (removedChildren.length) {
       removedChildren.forEach(({ element }) =>
         scheduleRemoveLeavingChild(element.key)
       );
-    }
-  }, [removedChildren, scheduleRemoveLeavingChild]);
-
-  const newLeavingChildren = React.useMemo(() => {
-    if (removedChildren.length) {
-      return mergeInRemovedChildren(removedChildren, leavingChildren.current);
-    }
-    return leavingChildren.current;
-  }, [removedChildren]);
-
-  // Update the current record of leaving children with the newly removed children
-  React.useEffect(() => {
-    leavingChildren.current = newLeavingChildren;
-  }, [newLeavingChildren]);
-
-  // Update the current record of inactive (just added/removed) animated elements
-  // useLayoutEffect is used instead of useEffect to guarantee that we don't rerender
-  // without having already added this to the inactive array, otherwise there could
-  // be strange artifacts as we start the animation the wrong way round
-  React.useLayoutEffect(() => {
-    if (addedChildren.length || removedChildren.length) {
+      setLeavingChildren(localLeavingChildren =>
+        mergeInRemovedChildren(removedChildren, localLeavingChildren)
+      );
       setInactiveChildren(localInactiveChildren => {
         const newInactiveChildren = new Set(localInactiveChildren);
-        addedChildren.concat(removedChildren).forEach(({ element }) => {
+        removedChildren.forEach(({ element }) => {
           newInactiveChildren.add(element.key);
           scheduleActivateElement(element.key);
         });
         return newInactiveChildren;
       });
     }
-  }, [addedChildren, removedChildren, scheduleActivateElement]);
+  }, [
+    arrayChildren,
+    scheduleRemoveLeavingChild,
+    setLeavingChildren,
+    scheduleActivateElement
+  ]);
 
-  // Set the oldChildren to be the current children for the next render
-  oldChildren.current = arrayChildren;
+  // Update the current record of inactive (just added/removed) animated elements
+  // useLayoutEffect is used instead of useEffect to guarantee that we don't rerender
+  // without having already added this to the inactive array, otherwise there could
+  // be strange artifacts as we start the animation the wrong way round
+  React.useLayoutEffect(() => {
+    if (addedChildren.length) {
+      setInactiveChildren(localInactiveChildren => {
+        const newInactiveChildren = new Set(localInactiveChildren);
+        addedChildren.forEach(({ element }) => {
+          newInactiveChildren.add(element.key);
+          scheduleActivateElement(element.key);
+        });
+        return newInactiveChildren;
+      });
+    }
+  }, [addedChildren, scheduleActivateElement]);
 
   const childrenToRender = React.useMemo(() => {
     const childrenToRenderLength =
-      arrayChildren.length + newLeavingChildren.length;
+      oldChildren.current.length + leavingChildren.length;
     const localChildrenToRender: Array<React.ReactElement> = new Array(
       childrenToRenderLength
     );
     // First add the leaving children at the correct indices
-    newLeavingChildren.forEach(({ element, index }) => {
+    leavingChildren.forEach(({ element, index }) => {
       const isInactive = inactiveChildren.has(element.key);
       localChildrenToRender[index] = cloneWithClassName(
         element,
@@ -265,7 +266,7 @@ export const TransitionGroup: React.FC<ITransitionGroupProps> = ({
       index++
     ) {
       if (!localChildrenToRender[index]) {
-        const child = arrayChildren[childIndex];
+        const child = oldChildren.current[childIndex];
         const isEntering = enteringChildren.has(child.key);
         const isInactive = inactiveChildren.has(child.key);
         const className = isEntering
@@ -274,7 +275,7 @@ export const TransitionGroup: React.FC<ITransitionGroupProps> = ({
             : `${transitionName}-enter ${transitionName}-enter-active`
           : "";
         localChildrenToRender[index] = cloneWithClassName(
-          arrayChildren[childIndex],
+          oldChildren.current[childIndex],
           className
         );
         childIndex++;
@@ -282,13 +283,12 @@ export const TransitionGroup: React.FC<ITransitionGroupProps> = ({
     }
 
     return localChildrenToRender;
-  }, [
-    transitionName,
-    arrayChildren,
-    newLeavingChildren,
-    enteringChildren,
-    inactiveChildren
-  ]);
+  }, [transitionName, leavingChildren, enteringChildren, inactiveChildren]);
+
+  // Set the oldChildren to be the current children for the next render
+  React.useEffect(() => {
+    oldChildren.current = arrayChildren;
+  }, [arrayChildren]);
 
   return <React.Fragment>{childrenToRender}</React.Fragment>;
 };
