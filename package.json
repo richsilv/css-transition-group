@@ -1,7 +1,7 @@
 {
   "name": "css-transition-group",
   "version": "1.0.0",
-  "description": "",
+  "description": "A ConcurrentMode-friendly hooks-based implementation of the old CSSTransitionGroup",
   "keywords": [],
   "main": "src/index.tsx",
   "dependencies": {

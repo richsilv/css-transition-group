@@ -6,6 +6,7 @@
 .square {
   width: 100px;
   height: 100px;
+  transition: background-color 1000ms;
 }
 
 .transition-enter {

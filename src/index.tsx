@@ -1,7 +1,7 @@
 import * as React from "react";
 import { render } from "react-dom";
 
-import { TransitionGroup } from "./TransitionGroup";
+import { CSSTransitionGroup } from "./CSSTransitionGroup";
 
 import "./styles.css";
 
@@ -46,6 +46,15 @@ function App() {
       return newSquares;
     });
   }, []);
+  const mutateSquare = React.useCallback(() => {
+    setSquares(_squares => {
+      const newSquares = [..._squares];
+      newSquares[
+        Math.floor(Math.random() * newSquares.length)
+      ].color = makeColor();
+      return newSquares;
+    });
+  }, []);
 
   return (
     <div className="App">
@@ -53,8 +62,9 @@ function App() {
       <h2>Start editing to see some magic happen!</h2>
 
       <button onClick={addSquare}>Add square</button>
+      <button onClick={mutateSquare}>Mutate square</button>
 
-      <TransitionGroup
+      <CSSTransitionGroup
         transitionEnterTimeout={1000}
         transitionLeaveTimeout={1000}
         transitionName="transition"
@@ -67,7 +77,7 @@ function App() {
             onClick={onClick(key)}
           />
         ))}
-      </TransitionGroup>
+      </CSSTransitionGroup>
     </div>
   );
 }
